@@ -1,0 +1,20 @@
+{
+  "name": "FotoMontana - Nikon D3400",
+  "short_name": "FotoMontana",
+  "description": "Asistente de fotografia de paisaje fantastico para rutas de senderismo",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "portrait-primary",
+  "lang": "es",
+  "categories": ["photo", "utilities", "lifestyle"],
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

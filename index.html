@@ -1,0 +1,1107 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+  <meta name="theme-color" content="#0f172a"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="FotoMontana"/>
+  <title>FotoMontana - Nikon D3400</title>
+  <link rel="manifest" href="manifest.json"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+    html, body, #root { height: 100%; margin: 0; padding: 0; background: #0f172a; }
+    select, input { outline: none; }
+    input[type=range] { height: 36px; cursor: pointer; }
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+    .pulse-alert { animation: pulseAlert 1s ease-in-out infinite; }
+    @keyframes pulseAlert {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+    .fade-in { animation: fadeIn 0.2s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo } = React;
+
+// ─── HELPERS ────────────────────────────────────────────────────────────────
+
+function speedToSeconds(speed) {
+  if (!speed) return 0;
+  const s = speed.toString().trim();
+  if (s.includes('/')) {
+    const [a, b] = s.split('/');
+    return parseFloat(a) / parseFloat(b);
+  }
+  return parseFloat(s);
+}
+
+function calcCameraEV(aperture, speed, iso) {
+  const t = speedToSeconds(speed);
+  const N = parseFloat(aperture);
+  const I = parseFloat(iso);
+  if (t <= 0 || N <= 0 || I <= 0) return null;
+  return Math.log2((N * N) / t) + Math.log2(I / 100);
+}
+
+function vibrate(pattern) {
+  try { if (navigator.vibrate) navigator.vibrate(pattern); } catch {}
+}
+
+function pad(n) { return n.toString().padStart(2, '0'); }
+function formatTime(d) { return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function getTodayKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function loadStorage(key, def) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : def; } catch { return def; }
+}
+function saveStorage(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+}
+
+// ─── CONSTANTS ───────────────────────────────────────────────────────────────
+
+const LIGHT_CONDITIONS = [
+  { id: 'cloudy',  label: 'Nublado',        icon: '⛅',  sceneEV: 8, iso: '1600', aperture: '5.6', speed: '1/30', lightLevel: 3, magic: 45,
+    note: 'Luz difusa perfecta para texturas: sin sombras duras ni brillos. Un filtro polarizador elimina reflejos en hojas mojadas y satura los verdes dramáticamente. Dispara en modo vertical para el dosel.' },
+  { id: 'rain',    label: 'Lluvia',          icon: '🌧️', sceneEV: 7, iso: '1600', aperture: '4.0', speed: '1/15', lightLevel: 2, magic: 60,
+    note: 'El agua empapa el musgo intensificando el color hasta el verde esmeralda. Polarizador imprescindible. Moja las raíces y rocas antes de disparar. Trípode obligatorio, temporizador 2s.' },
+  { id: 'fog',     label: 'Niebla',          icon: '🌫️', sceneEV: 7, iso: '1600', aperture: '4.0', speed: '1/15', lightLevel: 2, magic: 70,
+    note: 'Condición mágica máxima. Dispara hacia la fuente de luz (nunca directo) para rayos de dios. Máximo 1s — más tiempo borra la textura de la niebla. El AF falla: pasa a enfoque manual.' },
+  { id: 'fograin', label: 'Niebla + Lluvia', icon: '🌩️', sceneEV: 5, iso: '3200', aperture: '3.5', speed: '1/8',  lightLevel: 1, magic: 85,
+    note: 'Condiciones épicas de cuento. Dispara en RAW — Lightroom recupera 2 stops de sombra y reduce ruido. Efecto Orton en postpro añade el brillo sobrenatural definitivo.' },
+  { id: 'golden',  label: 'Hora dorada',     icon: '🌅',  sceneEV: 9, iso: '800',  aperture: '5.6', speed: '1/60', lightLevel: 4, magic: 75,
+    note: 'La hora más corta del día — prepara el encuadre antes de que llegue la luz. Busca el ángulo donde los rayos sean tangentes a la cámara entre los troncos: ahí nacen los haces dorados más épicos.' },
+];
+
+const APERTURES = ['2.8','3.5','4.0','4.5','5.0','5.6','6.3','7.1','8.0','9.0','10','11','13','14','16','18','20','22'];
+const ISOS     = ['100','200','400','800','1600','3200','6400','12800','25600'];
+const SPEEDS   = [
+  '30','25','20','15','13','10','8','6','5','4','3','2','1.6','1.3','1',
+  '1/1.3','1/1.6','1/2','1/2.5','1/3','1/4','1/5','1/6','1/8','1/10',
+  '1/13','1/15','1/20','1/25','1/30','1/40','1/50','1/60','1/80','1/100',
+  '1/125','1/160','1/200','1/250','1/320','1/400','1/500','1/640','1/800',
+  '1/1000','1/1250','1/1600','1/2000','1/2500','1/3200','1/4000',
+];
+
+const CHECKLIST = [
+  { id: 'foreground',  label: '¿Hay primer plano con vida?',              tip: 'Baja al suelo — musgo, helechos o raíces a cm de la cámara crean inmersión total' },
+  { id: 'godrays',     label: '¿Buscas rayos de luz entre troncos?',      tip: 'Dispara hacia la fuente de luz (nunca directo al sol). Necesitas niebla o partículas en el aire' },
+  { id: 'water_frame', label: '¿El agua ocupa más de 1/3?',               tip: '1-4s para efecto seda. En niebla: máximo 1s o perderás la textura del vapor' },
+  { id: 'texture',     label: '¿Musgo, rocas o raíces con textura?',      tip: 'Moja las raíces y el musgo antes de disparar — el color se intensifica dramáticamente' },
+  { id: 'vertical',    label: '¿Has probado orientación vertical?',       tip: 'El formato vertical captura la altura de los troncos y la profundidad del dosel — el bosque lo pide' },
+  { id: 'lines',       label: '¿Líneas que guíen hacia lo desconocido?',  tip: 'Sendero, río o raíces que se pierden en la niebla invitan a adentrarse en la escena' },
+  { id: 'depth',       label: '¿Tres planos: cerca, medio y fondo?',      tip: 'Capas que se desvanecen en la niebla o la penumbra crean la ilusión de bosque infinito' },
+  { id: 'chaos',       label: '¿Encuentras orden dentro del caos?',       tip: 'El bosque es caótico — busca una estructura, un patrón o un elemento que ancle la composición' },
+];
+
+const INSPIRATION = {
+  cascada: [
+    "Cascada entre rocas de musgo esmeralda: 2-4s a f/11. Moja las rocas del primer plano antes de disparar — el musgo húmedo intensifica el verde dramáticamente. Usa formato vertical para capturar el salto completo.",
+    "Perspectiva de rana contrapicada: coloca la cámara a 10cm del suelo bajo el salto. El agua parece caer desde el cielo entre ramas centenarias. Enfoque manual, f/8, ISO ajustado por exposición.",
+    "Plano macro sobre la roca: 1.6s a f/8. El agua fluye sobre musgo negro y verde mientras la roca mojada refleja la luz. La tensión entre quietud (roca) y movimiento (agua) es la historia.",
+  ],
+  bosque: [
+    "Rayos de dios en niebla matutina: posiciónate con la fuente de luz detrás tuyo o en ángulo — nunca directamente de frente. ISO 800, f/8, 1/60s. El autofoco falla en niebla: enfoque manual al tercio medio.",
+    "Perspectiva de rana entre helechos a 10cm del suelo: el bosque se transforma en tierra de gigantes. Encuadre vertical exagera la altura de los troncos. Niebla al fondo crea capas que se desvanecen misteriosamente.",
+    "Raíces contorsionadas emergiendo del suelo musgoso: moja las raíces para saturar el color. Fondo desenfocado a f/4 — busca raíces que formen arcos, espirales o siluetas de criaturas.",
+  ],
+  rio: [
+    "El río serpentea y desaparece en la niebla: 3s a f/11. Rocas con líquenes en primer plano, bosque fantasmal al fondo. El agua sedosa y la niebla crean dos capas de movimiento en la misma imagen.",
+    "Remanso: encuadra mitad real / mitad reflejo. El polarizador elimina los brillos de la superficie y potencia el reflejo hasta hacerlo casi tan nítido como la realidad — efecto espejo de cuento.",
+    "Contraluz al atardecer: el río como espejo dorado entre siluetas de troncos. f/11, ISO 200. Subexpón ligeramente (-0.7 EV) para que los rayos dorados en el agua sean más dramáticos.",
+  ],
+  niebla: [
+    "Rayos de luz entre troncos: llega una hora antes del amanecer. Posiciónate de espaldas a donde saldrá el sol. ISO 1600, f/5.6, tiempo máximo 1s — más tiempo borra la textura etérea de la niebla.",
+    "Árbol solitario emergiendo de la niebla: aísla un tronco centenario contra el vacío blanco. Expón a derechas (+1 EV) para preservar detalle en las altas luces. El AF fallará — enfoque manual.",
+    "Bosque de capas: tronco a 2m, segundo plano a 15m, tercero desapareciendo en la niebla. f/8 para mantener nitidez en el primer plano. Las capas que se desvanecen crean la ilusión de bosque infinito.",
+  ],
+  raices: [
+    "Sistema radicular de haya centenaria: red de tentáculos que abrazan la roca. 18mm a f/16, muy cerca. Moja las raíces y espera 30s — el color pasa de marrón a caoba brillante lleno de vida.",
+    "Raíces sobre arroyo: composición simétrica con reflejo en el agua. Trípode + 2s para efecto seda. El polarizador elimina brillos del agua y revela el color del fondo rocoso bajo las raíces.",
+    "Contraforma: busca el hueco entre raíces que encuadre el bosque en penumbra detrás. La naturaleza crea marcos imperfectos y orgánicos — más evocadores que cualquier composición forzada.",
+  ],
+};
+
+const DRONE_CHECKLIST = [
+  { id: 'battery',    label: 'Batería al 100%',               detail: 'Atom 2: máximo 32 min de vuelo efectivo' },
+  { id: 'zone',       label: 'Zona permitida verificada',     detail: 'Consulta AESA SkyMap antes de volar' },
+  { id: 'wind',       label: 'Viento aceptable (<30 km/h)',   detail: 'Atom 2 resiste hasta ~30 km/h con estabilidad reducida' },
+  { id: 'visibility', label: 'Visibilidad OK (>500m)',        detail: 'Debes ver el dron en todo momento (VLOS)' },
+  { id: 'people',     label: 'Sin personas cerca',            detail: 'Mantén distancia de seguridad siempre' },
+  { id: 'registered', label: 'Dron registrado en AESA',       detail: 'Obligatorio para todos los drones >250g' },
+];
+
+const HEIGHT_INFO = {
+  10: { view: 'Detalles del suelo claramente. Ideal para picados de cascadas y ríos. Los árboles pequeños quedan a la altura de la cámara.',      emoji: '🌊' },
+  20: { view: 'Vista de conjunto. Las copas de árboles quedan a la vista. Perspectiva aérea evidente. El mejor balance para fotografía creativa.', emoji: '🌿' },
+  30: { view: 'Vista panorámica del valle. Los árboles parecen pequeños. Puedes ver la línea completa del río y los meandros.',                    emoji: '🏔️' },
+  50: { view: 'Gran angular del paisaje. Montañas, valles y niebla en perspectiva épica. Los árboles son puntos de color.',                        emoji: '🌄' },
+  75: { view: 'Perspectiva de pájaro real. Detalles perdidos pero composición épica. Cuida la visibilidad — puedes perderlo de vista.',             emoji: '🦅' },
+  100:{ view: '⚠️ Límite técnico del Atom 2. Solo con mucha experiencia. En niebla es fácil perder el dron visualmente.',                          emoji: '⚠️' },
+};
+
+// ─── EXPOSURE TAB ────────────────────────────────────────────────────────────
+
+function ExposureTab() {
+  const [condition, setCondition] = useState(null);
+  const [iso,       setIso]       = useState('400');
+  const [aperture,  setAperture]  = useState('5.6');
+  const [speed,     setSpeed]     = useState('1');
+
+  const seconds   = speedToSeconds(speed);
+  const isSilk    = seconds >= 1;
+  const cameraEV  = calcCameraEV(aperture, speed, iso);
+  const sceneEV   = condition ? condition.sceneEV : null;
+
+  const exposureStatus = useMemo(() => {
+    if (cameraEV === null || sceneEV === null) return null;
+    const diff = cameraEV - sceneEV;
+    if (diff > 1.5) return 'over';
+    if (diff < -1.5) return 'under';
+    return 'ok';
+  }, [cameraEV, sceneEV]);
+
+  const needsND = isSilk && condition && condition.id === 'golden' && condition.lightLevel >= 4;
+
+  const d3400tip = useMemo(() => {
+    const ap = parseFloat(aperture), is = parseInt(iso);
+    if (is > 3200)  return `ISO ${iso} supera el límite práctico del D3400. El ruido será muy visible. Dispara en RAW y subexpón 1 stop — recuperarás luces sin añadir ruido. En postpro, el Efecto Orton (capa en Screen + Gaussian blur) añade el brillo etéreo que oculta el grano.`;
+    if (is > 1600)  return `ISO ${iso} en bosque: el ruido en sombras es inevitable con el APS-C del D3400. Dispara en RAW — Lightroom recupera 1-2 stops de sombra con mucho menos ruido que JPEG. Reduce la Claridad en postpro para un look más onírico.`;
+    if (ap < 4)     return `f/${aperture} abre mucho el diafragma. El Tokina 11-20mm f/2.8 te daría 2 stops más de luz que el kit 18-55mm — crucial en el dosel forestal. También en niebla: la perspectiva ultra-gran angular exagera la profundidad mágicamente.`;
+    if (condition?.id === 'fog' || condition?.id === 'fograin') return `En niebla el autofoco del D3400 falla — pasa al interruptor MF del objetivo. Enfoca manualmente al tercio del encuadre. Dispara hacia la fuente de luz para rayos de dios. Tiempo máximo 1s o la textura etérea de la niebla desaparece.`;
+    if (isSilk)     return `Con ${seconds}s el viento puede mover ramas y arruinar la nitidez. Usa trípode + temporizador 2s y espera calma absoluta. Con lluvia: coloca el trípode bajo el dosel para proteger la cámara mientras encuadras desde el lado seco.`;
+    if (condition?.id === 'fograin') return `El D3400 no tiene sellado contra agua. Con niebla + lluvia protege el cuerpo con una funda impermeable. El objetivo es el punto más vulnerable — un paño de microfibra cerca para limpiar gotas antes de cada disparo.`;
+    if (condition?.id === 'golden')  return `Prepara el encuadre 20 minutos antes. Busca el ángulo donde los rayos sean tangentes a la cámara entre troncos — ahí nacen los haces dorados más dramáticos. Subexpón -0.7 EV para que los rayos sean más contrastados y vívidos.`;
+    if (condition?.id === 'rain' || condition?.id === 'cloudy') return `Con lluvia o nublado, un filtro polarizador circular elimina los reflejos de las hojas mojadas y satura los verdes hasta un esmeralda mágico. El D3400 no lo incluye — es la inversión más impactante para fotografía de bosque.`;
+    return `APS-C crop 1.5x: el kit 18-55mm equivale a 27-82mm en FF. Para bosque, el Tokina 11-20mm f/2.8 (=16-30mm FF) combina gran angular extremo con f/2.8 — perspectivas de rana imposibles con el kit, y 2 stops más de luz en el dosel.`;
+  }, [aperture, iso, isSilk, seconds, condition]);
+
+  function applyCondition(c) {
+    setCondition(c);
+    setIso(c.iso);
+    setAperture(c.aperture);
+    setSpeed(c.speed);
+    vibrate([30]);
+  }
+
+  return (
+    <div className="p-4 space-y-4 fade-in">
+      {/* Condicion de luz */}
+      <div>
+        <div className="bg-emerald-950 border border-emerald-700 rounded-xl px-4 py-2 flex items-center gap-2 mb-3">
+          <span className="text-lg">🌲</span>
+          <span className="text-emerald-400 text-xs font-semibold uppercase tracking-wider">Modo bosque — parámetros calibrados para dosel forestal</span>
+        </div>
+        <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider mb-2">Condición de luz actual</p>
+        <div className="grid grid-cols-3 gap-2 mb-2">
+          {LIGHT_CONDITIONS.slice(0, 3).map(c => (
+            <button key={c.id} onClick={() => applyCondition(c)}
+              className={`p-3 rounded-xl text-center transition-all ${condition?.id === c.id ? 'bg-amber-500 text-slate-900 font-bold' : 'bg-slate-800 text-slate-200'}`}>
+              <div className="text-2xl">{c.icon}</div>
+              <div className="text-xs mt-1 leading-tight">{c.label}</div>
+            </button>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {LIGHT_CONDITIONS.slice(3).map(c => (
+            <button key={c.id} onClick={() => applyCondition(c)}
+              className={`p-3 rounded-xl text-center transition-all ${condition?.id === c.id ? 'bg-amber-500 text-slate-900 font-bold' : 'bg-slate-800 text-slate-200'}`}>
+              <div className="text-2xl">{c.icon}</div>
+              <div className="text-xs mt-1 leading-tight">{c.label}</div>
+            </button>
+          ))}
+        </div>
+        {condition?.note && (
+          <div className="bg-slate-800 rounded-xl px-4 py-3 mt-2">
+            <p className="text-slate-400 text-xs leading-relaxed">{condition.note}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Parametros */}
+      <div className="bg-slate-800 rounded-xl p-4 space-y-3">
+        <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Parámetros de exposición</p>
+        <div>
+          <label className="text-slate-400 text-xs">ISO</label>
+          <select value={iso} onChange={e => setIso(e.target.value)}
+            className="w-full bg-slate-700 text-white rounded-lg p-3 mt-1 text-lg font-mono">
+            {ISOS.map(i => <option key={i} value={i}>{i}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-slate-400 text-xs">Apertura</label>
+          <select value={aperture} onChange={e => setAperture(e.target.value)}
+            className="w-full bg-slate-700 text-white rounded-lg p-3 mt-1 text-lg font-mono">
+            {APERTURES.map(a => <option key={a} value={a}>f / {a}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-slate-400 text-xs">Velocidad de obturación</label>
+          <select value={speed} onChange={e => setSpeed(e.target.value)}
+            className="w-full bg-slate-700 text-white rounded-lg p-3 mt-1 text-lg font-mono">
+            {SPEEDS.map(s => <option key={s} value={s}>{s.includes('/') ? s + ' s' : s + '" s'}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Resultado seda */}
+      <div className={`rounded-xl p-4 flex items-start gap-3 border ${isSilk ? 'bg-emerald-950 border-emerald-600' : 'bg-slate-800 border-slate-700'}`}>
+        <span className="text-2xl flex-shrink-0">{isSilk ? '💧' : '💦'}</span>
+        <div>
+          <div className={`font-bold ${isSilk ? 'text-emerald-400' : 'text-slate-400'}`}>
+            {isSilk ? 'Efecto seda activado' : 'Sin efecto seda'}
+          </div>
+          <div className="text-slate-400 text-sm mt-0.5">
+            {isSilk
+              ? `${seconds}s — el agua quedará suave y sedosa, como en un sueño`
+              : `Necesitas al menos 1s para el efecto seda. Ahora: ${seconds < 1 ? '1/' + Math.round(1 / seconds) + 's' : seconds + 's'}`}
+          </div>
+        </div>
+      </div>
+
+      {/* Estado de exposicion */}
+      {exposureStatus && (
+        <div className={`rounded-xl p-4 flex items-start gap-3 border ${
+          exposureStatus === 'over'  ? 'bg-rose-950 border-rose-600' :
+          exposureStatus === 'under' ? 'bg-blue-950 border-blue-600' :
+                                       'bg-emerald-950 border-emerald-600'}`}>
+          <span className="text-2xl flex-shrink-0">
+            {exposureStatus === 'over' ? '⚠️' : exposureStatus === 'under' ? '🌑' : '✅'}
+          </span>
+          <div>
+            <div className={`font-bold ${exposureStatus === 'over' ? 'text-rose-400' : exposureStatus === 'under' ? 'text-blue-400' : 'text-emerald-400'}`}>
+              {exposureStatus === 'over' ? 'Riesgo de sobreexposición' : exposureStatus === 'under' ? 'Imagen subexpuesta' : 'Exposición correcta'}
+            </div>
+            <div className="text-slate-400 text-sm mt-0.5">
+              {exposureStatus === 'over'  ? 'Cierra el diafragma, baja el ISO o añade un filtro ND' :
+               exposureStatus === 'under' ? 'Abre el diafragma, sube el ISO o alarga el tiempo' :
+                                            'Combinación óptima para esta condición de luz'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filtro ND */}
+      {needsND && (
+        <div className="bg-indigo-950 border border-indigo-500 rounded-xl p-4 flex items-start gap-3">
+          <span className="text-2xl flex-shrink-0">🔵</span>
+          <div>
+            <div className="text-indigo-300 font-bold">Filtro ND necesario</div>
+            <div className="text-slate-400 text-sm mt-0.5">
+              Con luz {condition?.label.toLowerCase()} y {seconds >= 1 ? seconds + '"' : speed}s necesitas un filtro ND para el efecto seda sin sobreexponer. Recomendado: ND64 o ND256.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Consejo D3400 */}
+      <div className="bg-slate-800 rounded-xl p-4">
+        <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Consejo D3400 · APS-C · bosque</p>
+        <p className="text-slate-300 text-sm leading-relaxed">{d3400tip}</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── COMPOSITION TAB ─────────────────────────────────────────────────────────
+
+function CompositionTab() {
+  const [checked,     setChecked]     = useState({});
+  const [showOverlay, setShowOverlay] = useState(false);
+  const [scene,       setScene]       = useState('cascada');
+  const [inspoIdx,    setInspoIdx]    = useState(0);
+
+  const checkedCount = Object.values(checked).filter(Boolean).length;
+  const score = Math.round((checkedCount / CHECKLIST.length) * 100);
+
+  function toggleCheck(id) { setChecked(p => ({ ...p, [id]: !p[id] })); vibrate([30]); }
+  function nextInspo() { setInspoIdx(i => (i + 1) % INSPIRATION[scene].length); }
+  function changeScene(s) { setScene(s); setInspoIdx(0); }
+
+  return (
+    <div className="p-4 space-y-4 fade-in">
+      {/* Score */}
+      <div className="bg-slate-800 rounded-xl p-4">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-slate-400 text-sm">Preparación del encuadre</span>
+          <span className={`text-2xl font-bold ${score >= 75 ? 'text-emerald-400' : score >= 50 ? 'text-amber-400' : 'text-rose-400'}`}>{score}%</span>
+        </div>
+        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+          <div className={`h-2 rounded-full transition-all duration-300 ${score >= 75 ? 'bg-emerald-500' : score >= 50 ? 'bg-amber-500' : 'bg-rose-500'}`}
+            style={{ width: `${score}%` }}/>
+        </div>
+        <div className="text-slate-500 text-xs mt-2">
+          {score >= 75 ? 'Encuadre fantástico — ¡dispara ahora!' : score >= 50 ? 'Buen encuadre, busca el detalle que falta.' : 'El bosque esconde algo mejor — sigue explorando.'}
+        </div>
+      </div>
+
+      {/* Checklist */}
+      <div className="space-y-2">
+        <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Lista antes de disparar</p>
+        {CHECKLIST.map(item => (
+          <button key={item.id} onClick={() => toggleCheck(item.id)}
+            className={`w-full text-left p-4 rounded-xl flex items-start gap-3 transition-all ${checked[item.id] ? 'bg-emerald-950 border border-emerald-700' : 'bg-slate-800 border border-slate-700'}`}>
+            <span className={`text-xl flex-shrink-0 mt-0.5 ${checked[item.id] ? 'text-emerald-400' : 'text-slate-600'}`}>{checked[item.id] ? '✓' : '○'}</span>
+            <div>
+              <div className={`font-medium text-sm ${checked[item.id] ? 'text-emerald-300' : 'text-slate-200'}`}>{item.label}</div>
+              <div className="text-slate-500 text-xs mt-0.5">{item.tip}</div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Regla de tercios */}
+      <button onClick={() => { setShowOverlay(v => !v); vibrate([20]); }}
+        className={`w-full p-4 rounded-xl font-semibold text-sm transition-all ${showOverlay ? 'bg-amber-500 text-slate-900' : 'bg-slate-800 text-amber-400 border border-slate-700'}`}>
+        {showOverlay ? '✕ Ocultar regla de tercios' : '📐 Ver regla de tercios'}
+      </button>
+
+      {showOverlay && (
+        <div className="bg-slate-800 rounded-xl p-4">
+          <div className="relative w-full rounded-lg overflow-hidden" style={{ paddingBottom: '66%' }}>
+            <svg viewBox="0 0 300 200" className="absolute inset-0 w-full h-full" style={{ background: '#1e293b' }}>
+              {/* Grid lines */}
+              <line x1="100" y1="0" x2="100" y2="200" stroke="#f59e0b" strokeWidth="0.7" opacity="0.7"/>
+              <line x1="200" y1="0" x2="200" y2="200" stroke="#f59e0b" strokeWidth="0.7" opacity="0.7"/>
+              <line x1="0" y1="67"  x2="300" y2="67"  stroke="#f59e0b" strokeWidth="0.7" opacity="0.7"/>
+              <line x1="0" y1="133" x2="300" y2="133" stroke="#f59e0b" strokeWidth="0.7" opacity="0.7"/>
+              {/* Power points */}
+              {[[100,67],[200,67],[100,133],[200,133]].map(([x,y],i) => (
+                <g key={i}>
+                  <circle cx={x} cy={y} r="7" fill="none" stroke="#f59e0b" strokeWidth="1.5"/>
+                  <circle cx={x} cy={y} r="2" fill="#f59e0b"/>
+                </g>
+              ))}
+              {/* Water zone */}
+              <rect x="1" y="134" width="298" height="65" fill="#3b82f6" opacity="0.12"/>
+              <text x="8" y="168" fill="#60a5fa" fontSize="9">Zona ideal para agua o primer plano</text>
+              {/* Sky zone */}
+              <rect x="1" y="1" width="298" height="66" fill="#7c3aed" opacity="0.08"/>
+              <text x="8" y="20" fill="#a78bfa" fontSize="9">Zona cielo / fondo</text>
+              {/* Labels */}
+              <text x="107" y="57" fill="#fbbf24" fontSize="8">puntos de poder</text>
+              <text x="107" y="76" fill="#fbbf24" fontSize="7">(coloca tu sujeto aqui)</text>
+              <text x="8" y="195" fill="#475569" fontSize="8">Horizonte: tercio superior o inferior, nunca al centro</text>
+            </svg>
+          </div>
+          <p className="text-slate-500 text-xs mt-2">Los círculos amarillos son los 4 puntos de mayor atención visual. El sujeto principal debe coincidir con uno de ellos.</p>
+        </div>
+      )}
+
+      {/* Inspiracion */}
+      <div className="bg-slate-800 rounded-xl p-4 space-y-3">
+        <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Modo inspiración</p>
+        <div className="flex gap-1 flex-wrap">
+          {Object.keys(INSPIRATION).map(s => (
+            <button key={s} onClick={() => changeScene(s)}
+              className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${scene === s ? 'bg-amber-500 text-slate-900' : 'bg-slate-700 text-slate-300'}`}>
+              {({ cascada: 'Cascada', bosque: 'Bosque', rio: 'Río', niebla: 'Niebla', raices: 'Raíces' })[s]}
+            </button>
+          ))}
+        </div>
+        <div className="bg-slate-700 rounded-lg p-3 min-h-16">
+          <p className="text-slate-200 text-sm leading-relaxed">{INSPIRATION[scene][inspoIdx]}</p>
+        </div>
+        <button onClick={nextInspo}
+          className="w-full py-3 bg-slate-700 text-amber-400 rounded-xl font-medium text-sm">
+          Siguiente visión →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── DIARY TAB ───────────────────────────────────────────────────────────────
+
+function DiaryTab() {
+  const todayKey = getTodayKey();
+  const [shots, setShots] = useState(() => loadStorage(`shots-${todayKey}`, []));
+  const [form,  setForm]  = useState({ iso: '400', aperture: '5.6', speed: '1', condition: 'Nublado', note: '' });
+  const [recording, setRecording] = useState(false);
+  const recognitionRef = useRef(null);
+
+  function addShot() {
+    if (!form.iso) return;
+    const shot = { id: Date.now(), time: formatTime(new Date()), ...form };
+    const updated = [...shots, shot];
+    setShots(updated);
+    saveStorage(`shots-${todayKey}`, updated);
+    setForm(f => ({ ...f, note: '' }));
+    vibrate([50, 30, 50]);
+  }
+
+  function deleteShot(id) {
+    const updated = shots.filter(s => s.id !== id);
+    setShots(updated);
+    saveStorage(`shots-${todayKey}`, updated);
+  }
+
+  function startVoice() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert('Tu navegador no soporta reconocimiento de voz. Escribe la nota manualmente.'); return; }
+    const r = new SR();
+    r.lang = 'es-ES';
+    r.continuous = false;
+    r.interimResults = false;
+    r.onresult = e => {
+      const text = e.results[0][0].transcript;
+      setForm(f => ({ ...f, note: f.note ? f.note + ' ' + text : text }));
+      setRecording(false);
+    };
+    r.onerror = () => setRecording(false);
+    r.onend   = () => setRecording(false);
+    r.start();
+    recognitionRef.current = r;
+    setRecording(true);
+  }
+
+  function exportDiary() {
+    const lines = [
+      `DIARIO FOTOGRÁFICO - ${todayKey}`,
+      `Cámara: Nikon D3400 (APS-C, kit 18-55mm)`,
+      `${'─'.repeat(40)}`,
+      ...shots.map(s =>
+        `[${s.time}] ISO${s.iso}  f/${s.aperture}  ${s.speed.includes('/') ? s.speed : s.speed + '"'}s  | ${s.condition}${s.note ? '\n         Nota: ' + s.note : ''}${speedToSeconds(s.speed) >= 1 ? '  [SEDA]' : ''}`
+      ),
+      `${'─'.repeat(40)}`,
+      `Total: ${shots.length} disparos`,
+    ];
+    if (shots.length > 0) {
+      const isoCount = shots.reduce((a, s) => { a[s.iso] = (a[s.iso] || 0) + 1; return a; }, {});
+      const topISO = Object.entries(isoCount).sort((a, b) => b[1] - a[1])[0];
+      const silkN = shots.filter(s => speedToSeconds(s.speed) >= 1).length;
+      lines.push(`ISO más usado: ${topISO[0]} (${topISO[1]} veces)`);
+      lines.push(`Disparos con efecto seda: ${silkN}`);
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `diario-${todayKey}.txt`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const summary = useMemo(() => {
+    if (shots.length === 0) return null;
+    const allISO  = shots.reduce((a, s) => { a[s.iso] = (a[s.iso] || 0) + 1; return a; }, {});
+    const allCond = shots.reduce((a, s) => { a[s.condition] = (a[s.condition] || 0) + 1; return a; }, {});
+    const topISO  = Object.entries(allISO).sort((a, b) => b[1] - a[1])[0]?.[0];
+    const topCond = Object.entries(allCond).sort((a, b) => b[1] - a[1])[0]?.[0];
+    const silkN   = shots.filter(s => speedToSeconds(s.speed) >= 1).length;
+    return { topISO, topCond, silkN, total: shots.length };
+  }, [shots]);
+
+  return (
+    <div className="p-4 space-y-4 fade-in">
+      {/* Formulario */}
+      <div className="bg-slate-800 rounded-xl p-4 space-y-3">
+        <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Registrar disparo del bosque</p>
+        <div className="grid grid-cols-3 gap-2">
+          <div>
+            <label className="text-slate-500 text-xs">ISO</label>
+            <select value={form.iso} onChange={e => setForm(f => ({ ...f, iso: e.target.value }))}
+              className="w-full bg-slate-700 text-white rounded-lg p-2 text-sm mt-1 font-mono">
+              {ISOS.map(i => <option key={i}>{i}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-slate-500 text-xs">Apertura</label>
+            <select value={form.aperture} onChange={e => setForm(f => ({ ...f, aperture: e.target.value }))}
+              className="w-full bg-slate-700 text-white rounded-lg p-2 text-sm mt-1 font-mono">
+              {APERTURES.map(a => <option key={a} value={a}>f/{a}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-slate-500 text-xs">Velocidad</label>
+            <select value={form.speed} onChange={e => setForm(f => ({ ...f, speed: e.target.value }))}
+              className="w-full bg-slate-700 text-white rounded-lg p-2 text-sm mt-1 font-mono">
+              {SPEEDS.map(s => <option key={s} value={s}>{s.includes('/') ? s : s + '"'}</option>)}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className="text-slate-500 text-xs">Condición</label>
+          <select value={form.condition} onChange={e => setForm(f => ({ ...f, condition: e.target.value }))}
+            className="w-full bg-slate-700 text-white rounded-lg p-2 text-sm mt-1">
+            {LIGHT_CONDITIONS.map(c => <option key={c.id}>{c.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-slate-500 text-xs">Nota rápida</label>
+          <div className="flex gap-2 mt-1">
+            <input value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
+              placeholder="La niebla, la luz, el silencio del bosque..."
+              className="flex-1 bg-slate-700 text-white rounded-lg p-2 text-sm placeholder-slate-600"/>
+            <button onClick={startVoice}
+              className={`px-4 rounded-lg text-xl transition-all ${recording ? 'bg-rose-600 pulse-alert' : 'bg-slate-600'}`}
+              title="Nota de voz">🎤</button>
+          </div>
+          {recording && <p className="text-rose-400 text-xs mt-1">Escuchando... habla ahora</p>}
+        </div>
+        <button onClick={addShot}
+          className="w-full py-4 bg-amber-500 text-slate-900 rounded-xl font-bold text-lg active:scale-95 transition-transform">
+          📷 Registrar disparo
+        </button>
+      </div>
+
+      {/* Resumen del dia */}
+      {summary && (
+        <div className="bg-slate-800 rounded-xl p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Hoy — {summary.total} disparos</p>
+            <button onClick={exportDiary}
+              className="text-slate-400 text-xs bg-slate-700 px-3 py-2 rounded-lg">💾 Exportar</button>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="bg-slate-700 rounded-lg p-2 text-center">
+              <div className="text-slate-400 text-xs">ISO favorito</div>
+              <div className="text-white font-bold">{summary.topISO}</div>
+            </div>
+            <div className="bg-slate-700 rounded-lg p-2 text-center">
+              <div className="text-slate-400 text-xs">Condición</div>
+              <div className="text-white font-bold text-xs">{summary.topCond}</div>
+            </div>
+            <div className="bg-slate-700 rounded-lg p-2 text-center">
+              <div className="text-slate-400 text-xs">Efecto seda</div>
+              <div className="text-emerald-400 font-bold">{summary.silkN}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lista de disparos */}
+      <div className="space-y-2">
+        {shots.length === 0 ? (
+          <div className="text-slate-600 text-center py-10 text-sm">Sin disparos hoy.<br/>El bosque espera — registra tu primera aventura arriba.</div>
+        ) : (
+          shots.slice().reverse().map(shot => {
+            const silk = speedToSeconds(shot.speed) >= 1;
+            return (
+              <div key={shot.id} className="bg-slate-800 rounded-xl p-3 flex items-start gap-3">
+                <span className="text-slate-500 text-sm font-mono flex-shrink-0 mt-0.5">{shot.time}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-white text-sm font-mono">
+                    ISO{shot.iso} · f/{shot.aperture} · {shot.speed.includes('/') ? shot.speed : shot.speed + '"'}s
+                    {silk && <span className="text-emerald-400 ml-2">💧seda</span>}
+                  </div>
+                  <div className="text-slate-500 text-xs">{shot.condition}</div>
+                  {shot.note && <div className="text-slate-400 text-xs mt-1 italic truncate">"{shot.note}"</div>}
+                </div>
+                <button onClick={() => deleteShot(shot.id)} className="text-slate-700 p-1 flex-shrink-0">✕</button>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── DRONE TAB ────────────────────────────────────────────────────────────────
+
+function DroneTab() {
+  const [checklist,    setChecklist]    = useState({});
+  const [timerActive,  setTimerActive]  = useState(false);
+  const [elapsed,      setElapsed]      = useState(0);
+  const [height,       setHeight]       = useState(20);
+  const [alert20shown, setAlert20shown] = useState(false);
+  const [alert28shown, setAlert28shown] = useState(false);
+  const intervalRef = useRef(null);
+
+  const MAX  = 32 * 60;
+  const pct  = Math.min(100, (elapsed / MAX) * 100);
+  const left = Math.max(0, MAX - elapsed);
+  const allChecked = DRONE_CHECKLIST.every(i => checklist[i.id]);
+
+  const timerColor = elapsed >= 28 * 60 ? 'text-rose-400' : elapsed >= 20 * 60 ? 'text-amber-400' : 'text-emerald-400';
+  const barColor   = pct >= 87 ? 'bg-rose-500' : pct >= 62 ? 'bg-amber-500' : 'bg-emerald-500';
+
+  function toggleDroneCheck(id) { setChecklist(p => ({ ...p, [id]: !p[id] })); vibrate([30]); }
+
+  function startTimer() { setElapsed(0); setTimerActive(true); setAlert20shown(false); setAlert28shown(false); vibrate([100, 50, 100]); }
+  function stopTimer()  { clearInterval(intervalRef.current); setTimerActive(false); setElapsed(0); vibrate([200]); }
+
+  useEffect(() => {
+    if (!timerActive) { clearInterval(intervalRef.current); return; }
+    intervalRef.current = setInterval(() => {
+      setElapsed(prev => {
+        const next = prev + 1;
+        if (next === 20 * 60 && !alert20shown) {
+          setAlert20shown(true);
+          vibrate([400, 150, 400, 150, 400]);
+        }
+        if (next === 28 * 60 && !alert28shown) {
+          setAlert28shown(true);
+          vibrate([600, 200, 600, 200, 600, 200, 600]);
+        }
+        if (next >= MAX) { clearInterval(intervalRef.current); setTimerActive(false); vibrate([1000, 500, 1000, 500, 1000]); }
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(intervalRef.current);
+  }, [timerActive]);
+
+  const heightMarks = [10, 20, 30, 50, 75, 100];
+  const closestMark = heightMarks.reduce((p, c) => Math.abs(c - height) < Math.abs(p - height) ? c : p);
+  const heightInfo  = HEIGHT_INFO[closestMark];
+
+  return (
+    <div className="p-4 space-y-4 fade-in">
+      {/* Legal */}
+      <div className="bg-amber-950 border border-amber-600 rounded-xl p-4 flex gap-3">
+        <span className="text-2xl flex-shrink-0">⚠️</span>
+        <div>
+          <p className="text-amber-400 font-bold text-sm">Nota legal — AESA España</p>
+          <p className="text-amber-200 text-xs leading-relaxed mt-1">
+            Registra tu dron en AESA antes de volar. Drones &gt;250g requieren registro obligatorio, seguro de RC y formación A1/A3 mínima. Límite legal: 120 m sobre el suelo en categoría OPEN. Respeta las zonas restringidas.
+          </p>
+        </div>
+      </div>
+
+      {/* Checklist */}
+      <div className="space-y-2">
+        <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Checklist pre-vuelo</p>
+        {DRONE_CHECKLIST.map(item => (
+          <button key={item.id} onClick={() => toggleDroneCheck(item.id)}
+            className={`w-full text-left p-4 rounded-xl flex items-start gap-3 transition-all ${checklist[item.id] ? 'bg-emerald-950 border border-emerald-700' : 'bg-slate-800 border border-slate-700'}`}>
+            <span className={`text-xl flex-shrink-0 ${checklist[item.id] ? 'text-emerald-400' : 'text-slate-600'}`}>{checklist[item.id] ? '✓' : '○'}</span>
+            <div>
+              <div className={`font-medium text-sm ${checklist[item.id] ? 'text-emerald-300' : 'text-slate-200'}`}>{item.label}</div>
+              <div className="text-slate-500 text-xs mt-0.5">{item.detail}</div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Timer */}
+      <div className="bg-slate-800 rounded-xl p-4 space-y-4">
+        <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Temporizador de batería — Atom 2 (32 min)</p>
+
+        {elapsed >= 28 * 60 && timerActive && (
+          <div className="bg-rose-600 rounded-xl p-3 text-center font-bold text-white pulse-alert text-lg">
+            🚨 ATERRIZA AHORA
+          </div>
+        )}
+        {elapsed >= 20 * 60 && elapsed < 28 * 60 && timerActive && (
+          <div className="bg-amber-600 rounded-xl p-3 text-center font-bold text-slate-900">
+            ⚠️ Hora de volver a casa
+          </div>
+        )}
+
+        <div className="text-center">
+          <div className={`text-6xl font-mono font-bold tabular-nums ${timerActive ? timerColor : 'text-slate-600'}`}>
+            {pad(Math.floor(left / 60))}:{pad(left % 60)}
+          </div>
+          <div className="text-slate-500 text-sm mt-1">
+            {!timerActive ? 'Pulsa para iniciar al despegar' : elapsed < 20 * 60 ? 'En vuelo — graba el bosque' : elapsed < 28 * 60 ? 'Regresa a casa' : 'Aterriza ya'}
+          </div>
+        </div>
+
+        <div className="relative h-4 bg-slate-700 rounded-full overflow-hidden">
+          <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }}/>
+          <div className="absolute top-0 bottom-0 w-px bg-amber-400 opacity-80" style={{ left: '62.5%' }}/>
+          <div className="absolute top-0 bottom-0 w-px bg-rose-400 opacity-80"  style={{ left: '87.5%' }}/>
+        </div>
+        <div className="flex justify-between text-xs text-slate-600">
+          <span>0</span>
+          <span className="text-amber-400">20 min</span>
+          <span className="text-rose-400">28 min</span>
+          <span>32 min</span>
+        </div>
+
+        {!timerActive ? (
+          <button onClick={startTimer} disabled={!allChecked}
+            className={`w-full py-4 rounded-xl font-bold text-lg transition-all active:scale-95 ${allChecked ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-500'}`}>
+            {allChecked ? '🚀 Iniciar vuelo' : '⬆️ Completa el checklist primero'}
+          </button>
+        ) : (
+          <button onClick={stopTimer}
+            className="w-full py-4 bg-rose-700 text-white rounded-xl font-bold text-lg active:scale-95 transition-transform">
+            🛬 Aterrizado — detener
+          </button>
+        )}
+      </div>
+
+      {/* Guia de altura */}
+      <div className="bg-slate-800 rounded-xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Altura de vuelo</p>
+          <span className="text-white font-bold">{height} m</span>
+        </div>
+        <input type="range" min="10" max="100" step="5" value={height} onChange={e => setHeight(Number(e.target.value))}
+          className="w-full accent-amber-400"/>
+        <div className="flex justify-between text-xs text-slate-600">
+          {heightMarks.map(m => <span key={m}>{m}m</span>)}
+        </div>
+        <div className="bg-slate-700 rounded-lg p-3 flex gap-3 items-start">
+          <span className="text-2xl">{heightInfo.emoji}</span>
+          <p className="text-slate-300 text-sm leading-relaxed">{heightInfo.view}</p>
+        </div>
+        {height > 50 && (
+          <p className="text-amber-400 text-xs">Para principiantes recomendamos un máximo de 30-50 m hasta ganar experiencia y criterio visual.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── CONDITIONS TAB ───────────────────────────────────────────────────────────
+
+const ENV_ELEMENTS = [
+  { id: 'rain',      label: 'Lluvia',    icon: '🌧️', magic: 30 },
+  { id: 'fog',       label: 'Niebla',    icon: '🌫️', magic: 35 },
+  { id: 'waterfall', label: 'Cascada',   icon: '💧',  magic: 25 },
+  { id: 'moss',      label: 'Musgo',     icon: '🍀',  magic: 15 },
+  { id: 'mist',      label: 'Neblina',   icon: '☁️',  magic: 20 },
+  { id: 'roots',     label: 'Raíces',    icon: '🌳',  magic: 10 },
+  { id: 'forest',    label: 'Bosque',    icon: '🌲',  magic: 15 },
+  { id: 'river',     label: 'Río',       icon: '🏞️', magic: 20 },
+];
+
+function ConditionsTab() {
+  const [lightLevel, setLightLevel] = useState(5);
+  const [elements,   setElements]   = useState([]);
+  const [now,        setNow]        = useState(() => new Date());
+  const [goldenAlerShown, setGoldenAlertShown] = useState(false);
+
+  useEffect(() => {
+    const iv = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const isGoldenHour = useMemo(() => {
+    const h = now.getHours(), m = now.getMinutes();
+    const total = h * 60 + m;
+    return (total >= 390 && total <= 510) || (total >= 1140 && total <= 1260);
+  }, [now]);
+
+  useEffect(() => {
+    if (isGoldenHour && !goldenAlerShown) {
+      setGoldenAlertShown(true);
+      vibrate([300, 100, 300, 100, 300]);
+    }
+  }, [isGoldenHour]);
+
+  const magicScore = useMemo(() => {
+    let s = elements.reduce((acc, id) => {
+      const el = ENV_ELEMENTS.find(e => e.id === id);
+      return acc + (el ? el.magic : 0);
+    }, 0);
+    if (lightLevel >= 3 && lightLevel <= 6) s += 20;
+    else if (lightLevel <= 2) s += 10;
+    if (isGoldenHour) s += 40;
+    return Math.min(100, Math.max(0, s));
+  }, [elements, lightLevel, isGoldenHour]);
+
+  const suggestions = useMemo(() => {
+    if (lightLevel <= 2) return { iso: '3200-6400', ap: 'f/3.5',    speed: '1/15 - 2s',    nd: false };
+    if (lightLevel <= 4) return { iso: '800-1600',  ap: 'f/4-5.6',  speed: '1/30 - 1/8s',  nd: false };
+    if (lightLevel <= 6) return { iso: '400-800',   ap: 'f/5.6-8',  speed: '1/60 - 1/15s', nd: false };
+    if (lightLevel <= 8) return { iso: '100-400',   ap: 'f/8-11',   speed: '1/125 - 1/500s',nd: lightLevel >= 8 };
+    return                       { iso: '100',       ap: 'f/11-16',  speed: '1/500s o mas',  nd: true  };
+  }, [lightLevel]);
+
+  function toggleElement(id) {
+    setElements(prev => prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]);
+    vibrate([30]);
+  }
+
+  const lightEmoji = lightLevel <= 2 ? '🌑' : lightLevel <= 4 ? '🌒' : lightLevel <= 6 ? '🌓' : lightLevel <= 8 ? '🌔' : '☀️';
+  const magicLabel = magicScore >= 75 ? 'Condiciones épicas' : magicScore >= 50 ? 'Buen potencial mágico' : magicScore >= 25 ? 'Condiciones normales' : 'Escena sin magia aún';
+  const magicColor = magicScore >= 75 ? 'text-purple-400' : magicScore >= 50 ? 'text-amber-400' : magicScore >= 25 ? 'text-slate-300' : 'text-slate-500';
+  const magicBar   = magicScore >= 75 ? 'bg-purple-500' : magicScore >= 50 ? 'bg-amber-500' : 'bg-slate-500';
+
+  return (
+    <div className="p-4 space-y-4 fade-in">
+      {/* Golden hour alert */}
+      {isGoldenHour && (
+        <div className="bg-amber-950 border-2 border-amber-400 rounded-xl p-4 pulse-alert flex items-center gap-3">
+          <span className="text-3xl">🌅</span>
+          <div>
+            <p className="text-amber-300 font-bold">HORA DORADA ACTIVA</p>
+            <p className="text-amber-200 text-sm">Son las {formatTime(now)}. La luz es perfecta. Dispara ahora.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Nivel de luz */}
+      <div className="bg-slate-800 rounded-xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Nivel de luz</p>
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">{lightEmoji}</span>
+            <span className="text-white font-bold text-lg">{lightLevel}/10</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-slate-600 text-xs">Oscuro</span>
+          <input type="range" min="1" max="10" value={lightLevel} onChange={e => setLightLevel(Number(e.target.value))}
+            className="flex-1 accent-amber-400"/>
+          <span className="text-slate-600 text-xs">Brillante</span>
+        </div>
+        <div className="flex gap-1.5">
+          {Array.from({ length: 10 }, (_, i) => (
+            <div key={i} className={`flex-1 h-3 rounded-full transition-all ${i < lightLevel ? 'bg-amber-400' : 'bg-slate-700'}`}/>
+          ))}
+        </div>
+        <div className="bg-slate-700 rounded-lg p-3 space-y-1">
+          <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider">Sugerencia D3400</p>
+          <p className="text-slate-200 text-sm">ISO {suggestions.iso} · {suggestions.ap} · {suggestions.speed}</p>
+          {suggestions.nd && <p className="text-amber-400 text-xs">Considera un filtro ND para velocidades largas y efecto seda</p>}
+        </div>
+      </div>
+
+      {/* Elementos del entorno */}
+      <div className="bg-slate-800 rounded-xl p-4 space-y-3">
+        <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Elementos presentes en el bosque</p>
+        <div className="grid grid-cols-4 gap-2">
+          {ENV_ELEMENTS.map(el => (
+            <button key={el.id} onClick={() => toggleElement(el.id)}
+              className={`p-3 rounded-xl text-center transition-all ${elements.includes(el.id) ? 'bg-purple-900 border border-purple-500' : 'bg-slate-700'}`}>
+              <div className="text-2xl">{el.icon}</div>
+              <div className="text-xs text-slate-300 mt-1">{el.label}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Magic counter */}
+      <div className={`rounded-xl p-4 space-y-3 border-2 ${magicScore >= 75 ? 'bg-purple-950 border-purple-500' : magicScore >= 50 ? 'bg-amber-950 border-amber-600' : 'bg-slate-800 border-slate-700'}`}>
+        <div className="flex items-center justify-between">
+          <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Potencial mágico</p>
+          <span className={`text-3xl font-bold ${magicColor}`}>{magicScore}%</span>
+        </div>
+        <div className="h-4 bg-slate-900 rounded-full overflow-hidden">
+          <div className={`h-full rounded-full transition-all duration-500 ${magicBar}`} style={{ width: `${magicScore}%` }}/>
+        </div>
+        <p className={`text-sm font-medium ${magicColor}`}>{magicLabel}</p>
+        <p className="text-slate-400 text-xs">
+          {magicScore >= 75 ? 'Combinación óptima detectada. Cada segundo que pases sin disparar es luz perdida para siempre. Monta el trípode YA.' :
+           magicScore >= 50 ? 'Vale la pena montar el trípode. Busca el ángulo perfecto — la magia del bosque está ahí.' :
+           magicScore >= 25 ? 'Condiciones normales. Busca composiciones creativas y ángulos a ras del suelo.' :
+                              'Espera mejores condiciones o busca detalles de textura, musgo y patrón.'}
+        </p>
+        {isGoldenHour && <p className="text-amber-300 text-xs">+40 pts — Hora dorada activa</p>}
+        {elements.length > 0 && <p className="text-purple-300 text-xs">Elementos: {elements.map(id => ENV_ELEMENTS.find(e => e.id === id)?.label).join(' + ')}</p>}
+      </div>
+    </div>
+  );
+}
+
+// ─── HISTORY TAB ─────────────────────────────────────────────────────────────
+
+function HistoryTab() {
+  const [sessions, setSessions] = useState([]);
+
+  useEffect(() => {
+    const all = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('shots-')) {
+        try {
+          const shots = JSON.parse(localStorage.getItem(key));
+          if (Array.isArray(shots) && shots.length > 0)
+            all.push({ date: key.replace('shots-', ''), shots });
+        } catch {}
+      }
+    }
+    all.sort((a, b) => b.date.localeCompare(a.date));
+    setSessions(all);
+  }, []);
+
+  const insights = useMemo(() => {
+    if (sessions.length === 0) return null;
+    const all = sessions.flatMap(s => s.shots);
+    const isoMap  = all.reduce((a, s) => { a[s.iso]       = (a[s.iso] || 0) + 1;       return a; }, {});
+    const apMap   = all.reduce((a, s) => { a[s.aperture]  = (a[s.aperture] || 0) + 1;  return a; }, {});
+    const condMap = all.reduce((a, s) => { a[s.condition] = (a[s.condition] || 0) + 1; return a; }, {});
+    const silkMap = all.filter(s => speedToSeconds(s.speed) >= 1)
+                       .reduce((a, s) => { a[s.condition] = (a[s.condition] || 0) + 1; return a; }, {});
+    const topISO  = Object.entries(isoMap).sort((a, b) => b[1] - a[1])[0]?.[0];
+    const topAp   = Object.entries(apMap).sort((a, b) => b[1] - a[1])[0]?.[0];
+    const topCond = Object.entries(condMap).sort((a, b) => b[1] - a[1])[0]?.[0];
+    const bestSilkCond = Object.entries(silkMap).sort((a, b) => b[1] - a[1])[0]?.[0];
+    const silkTotal = all.filter(s => speedToSeconds(s.speed) >= 1).length;
+    const tip = parseInt(topISO) > 800
+      ? `Tiendes a usar ISO alto (${topISO}). Lleva siempre el trípode — bajar a ISO 400 marca la diferencia en sombras de bosque.`
+      : bestSilkCond
+      ? `Tus mejores fotos con efecto seda son en "${bestSilkCond}". Prioriza esa condición en tu próxima salida al bosque.`
+      : `Con ${sessions.length} sesiones acumuladas, el Tokina 11-20mm f/2.8 te abriría un mundo nuevo en el dosel forestal.`;
+    return { topISO, topAp, topCond, bestSilkCond, silkTotal, total: all.length, sessions: sessions.length, tip };
+  }, [sessions]);
+
+  function clearAll() {
+    if (!confirm('¿Borrar todo el historial? Esta acción no se puede deshacer.')) return;
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('shots-')) localStorage.removeItem(key);
+    }
+    setSessions([]);
+  }
+
+  return (
+    <div className="p-4 space-y-4 fade-in">
+      {sessions.length === 0 ? (
+        <div className="text-center py-14">
+          <div className="text-5xl mb-4">📊</div>
+          <div className="text-slate-500 text-sm">Sin historial todavía.</div>
+          <div className="text-slate-600 text-xs mt-1">Empieza a registrar tus aventuras en la pestaña Diario.</div>
+        </div>
+      ) : (
+        <>
+          {insights && (
+            <div className="bg-slate-800 rounded-xl p-4 space-y-3">
+              <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Tu estilo en el bosque</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-slate-700 rounded-lg p-3">
+                  <div className="text-slate-500 text-xs">ISO favorito</div>
+                  <div className="text-white text-xl font-bold font-mono">{insights.topISO}</div>
+                </div>
+                <div className="bg-slate-700 rounded-lg p-3">
+                  <div className="text-slate-500 text-xs">Apertura favorita</div>
+                  <div className="text-white text-xl font-bold font-mono">f/{insights.topAp}</div>
+                </div>
+                <div className="bg-slate-700 rounded-lg p-3">
+                  <div className="text-slate-500 text-xs">Condición top</div>
+                  <div className="text-emerald-400 text-sm font-bold">{insights.topCond || '—'}</div>
+                </div>
+                <div className="bg-slate-700 rounded-lg p-3">
+                  <div className="text-slate-500 text-xs">Fotos con seda</div>
+                  <div className="text-emerald-400 text-xl font-bold">{insights.silkTotal}<span className="text-slate-500 text-sm font-normal"> / {insights.total}</span></div>
+                </div>
+              </div>
+              <div className="bg-amber-950 border border-amber-700 rounded-lg p-3">
+                <p className="text-amber-400 text-xs font-semibold uppercase tracking-wider mb-1">Para tu próxima salida al bosque</p>
+                <p className="text-amber-200 text-sm leading-relaxed">{insights.tip}</p>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-amber-400 font-semibold text-xs uppercase tracking-wider">Sesiones ({sessions.length})</p>
+              <button onClick={clearAll} className="text-slate-600 text-xs">Borrar todo</button>
+            </div>
+            {sessions.map(session => {
+              const silkN = session.shots.filter(s => speedToSeconds(s.speed) >= 1).length;
+              const firstTime = session.shots[0]?.time;
+              const lastTime  = session.shots[session.shots.length - 1]?.time;
+              const notedShot = session.shots.find(s => s.note);
+              return (
+                <div key={session.date} className="bg-slate-800 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-white font-medium">{session.date}</span>
+                    <span className="text-slate-500 text-sm">{session.shots.length} {session.shots.length === 1 ? 'disparo' : 'disparos'}</span>
+                  </div>
+                  <div className="flex items-center gap-4 text-sm flex-wrap">
+                    <span className="text-emerald-400">💧 {silkN} con seda</span>
+                    {firstTime && <span className="text-slate-600 text-xs">{firstTime} — {lastTime}</span>}
+                  </div>
+                  {notedShot && (
+                    <p className="text-slate-500 text-xs italic mt-1 truncate">"{notedShot.note}"</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── APP ROOT ─────────────────────────────────────────────────────────────────
+
+const TABS = [
+  { label: 'Exposicion', icon: '📷', component: ExposureTab },
+  { label: 'Composicion', icon: '🖼️', component: CompositionTab },
+  { label: 'Diario',     icon: '📖', component: DiaryTab },
+  { label: 'Dron',       icon: '🚁', component: DroneTab },
+  { label: 'Entorno',    icon: '🌿', component: ConditionsTab },
+  { label: 'Historial',  icon: '📊', component: HistoryTab },
+];
+
+function App() {
+  const [activeTab, setActiveTab] = useState(0);
+  const [clock,     setClock]     = useState(() => formatTime(new Date()));
+
+  // Reloj en header
+  useEffect(() => {
+    const iv = setInterval(() => setClock(formatTime(new Date())), 10000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Wake Lock — pantalla siempre encendida
+  useEffect(() => {
+    let lock = null;
+    async function request() {
+      try { if ('wakeLock' in navigator) lock = await navigator.wakeLock.request('screen'); } catch {}
+    }
+    request();
+    const onVis = () => { if (!document.hidden) request(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { document.removeEventListener('visibilitychange', onVis); lock?.release(); };
+  }, []);
+
+  // Service Worker
+  useEffect(() => {
+    if ('serviceWorker' in navigator)
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }, []);
+
+  const ActiveTab = TABS[activeTab].component;
+
+  function switchTab(i) { setActiveTab(i); vibrate([15]); }
+
+  return (
+    <div style={{ height: '100dvh' }} className="flex flex-col bg-slate-900 text-white max-w-lg mx-auto">
+      {/* Header */}
+      <div className="flex-shrink-0 bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between">
+        <div>
+          <h1 className="text-white font-bold text-base leading-none tracking-tight">FotoMontana</h1>
+          <p className="text-slate-600 text-xs mt-0.5">Nikon D3400 · APS-C · 18-55 / 11-20mm</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-slate-500 text-sm font-mono">{clock}</span>
+          <span className="text-slate-700 text-xs bg-slate-800 px-2 py-1 rounded-lg">{TABS[activeTab].label}</span>
+        </div>
+      </div>
+
+      {/* Contenido activo */}
+      <div className="flex-1 overflow-y-auto">
+        <ActiveTab key={activeTab}/>
+      </div>
+
+      {/* Navegacion inferior */}
+      <div className="flex-shrink-0 bg-slate-900 border-t border-slate-800 pb-safe">
+        <div className="grid grid-cols-6">
+          {TABS.map((tab, i) => (
+            <button key={i} onClick={() => switchTab(i)}
+              className={`py-3 flex flex-col items-center gap-0.5 transition-colors ${activeTab === i ? 'text-amber-400' : 'text-slate-600'}`}>
+              <span className="text-xl leading-none">{tab.icon}</span>
+              <span className="text-xs leading-none">{tab.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0f172a"/>
+  <rect x="40" y="40" width="432" height="432" rx="72" fill="#1e293b"/>
+  <!-- Camera body -->
+  <rect x="96" y="180" width="320" height="220" rx="24" fill="#334155"/>
+  <!-- Lens -->
+  <circle cx="256" cy="295" r="85" fill="#1e293b" stroke="#f59e0b" stroke-width="6"/>
+  <circle cx="256" cy="295" r="60" fill="#0f172a" stroke="#475569" stroke-width="3"/>
+  <circle cx="256" cy="295" r="35" fill="#1e293b"/>
+  <circle cx="240" cy="279" r="8" fill="#f8fafc" opacity="0.3"/>
+  <!-- Viewfinder -->
+  <rect x="200" y="140" width="112" height="50" rx="10" fill="#334155"/>
+  <!-- Flash bump -->
+  <rect x="96" y="160" width="48" height="28" rx="8" fill="#475569"/>
+  <!-- Water droplet accent (silk effect) -->
+  <ellipse cx="380" cy="210" rx="18" ry="22" fill="#f59e0b" opacity="0.8"/>
+  <ellipse cx="380" cy="205" rx="8" ry="6" fill="#fef3c7" opacity="0.5"/>
+  <!-- Mountain silhouette inside lens -->
+  <polygon points="220,330 256,270 292,330" fill="#334155" opacity="0.6"/>
+  <polygon points="236,330 262,285 288,330" fill="#475569" opacity="0.5"/>
+</svg>
