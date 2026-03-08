@@ -75,15 +75,15 @@ function saveStorage(key, val) {
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 
 const LIGHT_CONDITIONS = [
-  { id: 'cloudy',  label: 'Nublado',        icon: '⛅',  sceneEV: 8, iso: '1600', aperture: '5.6', speed: '1/30', lightLevel: 3, magic: 45,
+  { id: 'cloudy',  label: 'Nublado',        icon: '⛅',  sceneEV: 14, iso: '1600', aperture: '5.6', speed: '1/30', lightLevel: 3, magic: 45,
     note: 'Luz difusa perfecta para texturas: sin sombras duras ni brillos. Un filtro polarizador elimina reflejos en hojas mojadas y satura los verdes dramáticamente. Dispara en modo vertical para el dosel.' },
-  { id: 'rain',    label: 'Lluvia',          icon: '🌧️', sceneEV: 7, iso: '1600', aperture: '4.0', speed: '1/15', lightLevel: 2, magic: 60,
+  { id: 'rain',    label: 'Lluvia',          icon: '🌧️', sceneEV: 12, iso: '1600', aperture: '4.0', speed: '1/15', lightLevel: 2, magic: 60,
     note: 'El agua empapa el musgo intensificando el color hasta el verde esmeralda. Polarizador imprescindible. Moja las raíces y rocas antes de disparar. Trípode obligatorio, temporizador 2s.' },
-  { id: 'fog',     label: 'Niebla',          icon: '🌫️', sceneEV: 7, iso: '1600', aperture: '4.0', speed: '1/15', lightLevel: 2, magic: 70,
+  { id: 'fog',     label: 'Niebla',          icon: '🌫️', sceneEV: 12, iso: '1600', aperture: '4.0', speed: '1/15', lightLevel: 2, magic: 70,
     note: 'Condición mágica máxima. Dispara hacia la fuente de luz (nunca directo) para rayos de dios. Máximo 1s — más tiempo borra la textura de la niebla. El AF falla: pasa a enfoque manual.' },
-  { id: 'fograin', label: 'Niebla + Lluvia', icon: '🌩️', sceneEV: 5, iso: '3200', aperture: '3.5', speed: '1/8',  lightLevel: 1, magic: 85,
+  { id: 'fograin', label: 'Niebla + Lluvia', icon: '🌩️', sceneEV: 12, iso: '3200', aperture: '3.5', speed: '1/8',  lightLevel: 1, magic: 85,
     note: 'Condiciones épicas de cuento. Dispara en RAW — Lightroom recupera 2 stops de sombra y reduce ruido. Efecto Orton en postpro añade el brillo sobrenatural definitivo.' },
-  { id: 'golden',  label: 'Hora dorada',     icon: '🌅',  sceneEV: 9, iso: '800',  aperture: '5.6', speed: '1/60', lightLevel: 4, magic: 75,
+  { id: 'golden',  label: 'Hora dorada',     icon: '🌅',  sceneEV: 14, iso: '800',  aperture: '5.6', speed: '1/60', lightLevel: 4, magic: 75,
     note: 'La hora más corta del día — prepara el encuadre antes de que llegue la luz. Busca el ángulo donde los rayos sean tangentes a la cámara entre los troncos: ahí nacen los haces dorados más épicos.' },
 ];
 
